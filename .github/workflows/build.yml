@@ -1,31 +1,29 @@
-name: Extract ZIP
+name: Android APK Build
 
 on:
   workflow_dispatch:
 
 jobs:
-  extract:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract ZIP
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build APK
         run: |
-          echo "Searching for ZIP files..."
-          find . -type f -name "*.zip"
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
-          ZIP_FILE=$(find . -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found"
-            exit 1
-          fi
-
-          echo "Found: $ZIP_FILE"
-          mkdir -p extracted
-          unzip -o "$ZIP_FILE" -d extracted
-
-          echo "Files extracted:"
-          find extracted -maxdepth 4 -type f
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-APK
+          path: app/build/outputs/apk/debug/*.apk
