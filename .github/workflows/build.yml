@@ -16,16 +16,88 @@ jobs:
       - name: Inspect zip
         run: unzip -l tokenhunter-structure.zip
 
-      - name: Extract project
+      - name: Extract and locate project
         run: |
-          unzip -o tokenhunter-structure.zip -d ./tmp
-          if [ -f ./tmp/settings.gradle.kts ] || [ -d ./tmp/app ]; then
-            cp -a ./tmp/. .
-          else
-            cp -a ./tmp/*/. .
-          fi
+          set -e
           rm -rf ./tmp
+          unzip -o tokenhunter-structure.zip -d ./tmp
+          APPFILE=$(find ./tmp -type f -name build.gradle.kts -path '*/app/*' | head -n1)
+          if [ -z "$APPFILE" ]; then
+            echo "::error::app/build.gradle.kts داخل زیپ پیدا نشد"
+            find ./tmp -maxdepth 4 | head -n 60
+            exit 1
+          fi
+          APPDIR=$(dirname "$APPFILE")
+          ROOT=$(dirname "$APPDIR")
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "APPDIR=$APPDIR" >> "$GITHUB_ENV"
+          echo "--- ROOT ---"
+          ls -la "$ROOT"
+          echo "--- APP ---"
+          ls -la "$APPDIR"
+          if [ ! -f "$APPDIR/src/main/AndroidManifest.xml" ]; then
+            echo "::error::AndroidManifest.xml داخل app نیست"
+            exit 1
+          fi
+
+      - name: Ensure root gradle files
+        run: |
+          set -e
+          cd "$PROJECT_ROOT"
+          if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
+            cat > settings.gradle.kts <<'EOF'
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "TokenHunter"
+include(":app")
+EOF
+            echo "settings.gradle.kts ساخته شد"
+          fi
+          if [ ! -f build.gradle.kts ] && [ ! -f build.gradle ]; then
+            cat > build.gradle.kts <<'EOF'
+plugins {
+    id("com.android.application") version "8.6.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+}
+EOF
+            echo "build.gradle.kts ساخته شد"
+          fi
+          if [ ! -f gradle.properties ]; then
+            cat > gradle.properties <<'EOF'
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+android.useAndroidX=true
+android.nonTransitiveRClass=true
+kotlin.code.style=official
+EOF
+            echo "gradle.properties ساخته شد"
+          fi
           ls -la
+
+      - name: Patch app build file
+        run: |
+          set -e
+          F="$APPDIR/build.gradle.kts"
+          if ! grep -q "namespace" "$F"; then
+            sed -i '0,/^android {/s//android {\n    namespace = "ir.venice.tokenhunter"/' "$F"
+            echo "namespace اضافه شد"
+          fi
+          echo "--- app/build.gradle.kts ---"
+          head -n 40 "$F"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -46,13 +118,13 @@ jobs:
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           yes 2>/dev/null | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "platforms;android-35" "build-tools;35.0.0" > /dev/null || true
 
       - name: Build APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: gradle -p "$PROJECT_ROOT" assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Android-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/debug/*.apk
